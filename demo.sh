@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Silent-failure demo: a "temporary" debug NetworkPolicy opens egress; the agent notices nothing; the probe does.
 set -uo pipefail
-M() { kubectl -n sandbox exec client -c probe -- curl -s localhost:9100/metrics | grep -E '^egress_(bypass_blocked|enforcement_verified|dns_exfil)'; }
+M() { kubectl -n sandbox exec client -c probe -- curl -s localhost:9100/metrics | grep -E '^egress_(bypass_blocked|allow_canary|enforcement_verified|dns_exfil)'; }
 wait_run() { echo "  ...waiting for the next probe run"; sleep 20; }
 
 echo "== 1. baseline"; M

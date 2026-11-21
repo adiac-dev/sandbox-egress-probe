@@ -14,7 +14,8 @@ CA = os.environ.get("PROBE_CA", "/ca/ca.crt")
 INTERVAL = int(os.environ.get("PROBE_INTERVAL", "15"))
 PORT = int(os.environ.get("PROBE_PORT", "9100"))
 
-state = {"results": {}, "dns_exfil_blocked": None, "proxy_up": None, "last_run": 0.0}
+START = time.monotonic()
+state = {"results": {}, "dns_exfil_blocked": None, "proxy_up": None, "allow_canary": None, "last_run": 0.0}
 lock = threading.Lock()
 
 
@@ -50,6 +51,14 @@ def proxy_check():
     return code != "000", code == "403"  # (proxy reachable, disallowed host refused)
 
 
+def allow_canary():
+    # The half that makes deny results meaningful: an allowed request MUST succeed through the proxy.
+    # A deny-only probe passes trivially when nothing works at all.
+    rc, out = run(["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "8",
+                   "--proxy", PROXY, "--cacert", CA, "https://github.com/"])
+    return out.strip()[-3:] in {"200", "301", "302"}
+
+
 def dns_exfil_blocked():
     # A unique name under an external domain: if cluster DNS forwards it upstream, data can leave via DNS
     name = f"{uuid.uuid4().hex[:12]}.egress-probe.example.com."
@@ -71,12 +80,14 @@ def probe_once():
     proxy_up, proxy_refuses = proxy_check()
     results["proxy_disallowed_host"] = proxy_refuses
     exfil = dns_exfil_blocked()
+    canary = allow_canary()
     with lock:
-        state.update(results=results, dns_exfil_blocked=exfil, proxy_up=proxy_up, last_run=time.time())
-    verified = all(results.values())
+        state.update(results=results, dns_exfil_blocked=exfil, proxy_up=proxy_up,
+                     allow_canary=canary, last_run=time.time())
+    verified = canary and all(results.values())  # unverified => not verified (fail closed)
     summary = " ".join(f"{k}={'blocked' if v else 'OPEN'}" for k, v in results.items())
-    print(f"verified={int(verified)} proxy_up={int(proxy_up)} dns_exfil={'blocked' if exfil else 'OPEN'} {summary}",
-          flush=True)
+    print(f"verified={int(verified)} allow_canary={int(canary)} proxy_up={int(proxy_up)} "
+          f"dns_exfil={'blocked' if exfil else 'OPEN'} {summary} t=+{time.monotonic() - START:.1f}s", flush=True)
 
 
 def loop():
@@ -99,9 +110,12 @@ def render():
         lines.append(f'egress_bypass_blocked{{path="{path}"}} {int(ok)}')
     if s["results"]:
         lines += [
-            "# HELP egress_enforcement_verified 1 if every in-scope bypass path is blocked",
+            "# HELP egress_allow_canary_ok 1 if an allowed request succeeded through the proxy",
+            "# TYPE egress_allow_canary_ok gauge",
+            f"egress_allow_canary_ok {int(s['allow_canary'])}",
+            "# HELP egress_enforcement_verified 1 if the allow-canary passed AND every in-scope bypass path is blocked",
             "# TYPE egress_enforcement_verified gauge",
-            f"egress_enforcement_verified {int(all(s['results'].values()))}",
+            f"egress_enforcement_verified {int(bool(s['allow_canary']) and all(s['results'].values()))}",
             "# HELP egress_dns_exfil_blocked 1 if cluster DNS does not forward external names (DNS exfiltration)",
             "# TYPE egress_dns_exfil_blocked gauge",
             f"egress_dns_exfil_blocked {int(s['dns_exfil_blocked'])}",
