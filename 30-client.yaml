@@ -1,0 +1,38 @@
+# Plain Pod first (Sandbox creates a Pod anyway) — wrap it in an agent-sandbox Sandbox once this works.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: client
+  namespace: sandbox
+  labels:
+    egress-policy: enforced
+spec:
+  containers:
+  - name: agent
+    image: lab-client:v1
+    imagePullPolicy: Never
+    env:
+    - {name: HTTPS_PROXY, value: "http://egress-proxy.egress.svc.cluster.local:8080"}
+    - {name: HTTP_PROXY,  value: "http://egress-proxy.egress.svc.cluster.local:8080"}
+    - {name: NO_PROXY,    value: ".svc,.cluster.local"}
+    - {name: GIT_SSL_CAINFO, value: /ca/ca.crt}
+    - {name: CURL_CA_BUNDLE, value: /ca/ca.crt}
+    - {name: SSL_CERT_FILE,  value: /ca/ca.crt}
+    volumeMounts:
+    - {name: ca, mountPath: /ca, readOnly: true}
+  - name: probe          # sidecar: same network namespace as the agent, so it sees exactly what the agent can reach
+    image: lab-client:v1
+    imagePullPolicy: Never
+    command: ["python3", "-u", "/probe/probe.py"]
+    env:
+    - {name: PROBE_INTERVAL, value: "15"}
+    ports:
+    - {name: metrics, containerPort: 9100}
+    volumeMounts:
+    - {name: ca, mountPath: /ca, readOnly: true}
+    - {name: probe, mountPath: /probe, readOnly: true}
+  volumes:
+  - name: ca
+    configMap: {name: egress-ca}
+  - name: probe
+    configMap: {name: egress-probe}

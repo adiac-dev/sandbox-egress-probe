@@ -1,0 +1,12 @@
+# The "temporary" debug policy. NetworkPolicies are additive: this one silently opens all egress
+# for every pod in the namespace, while the agent keeps working exactly as before.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: debug-allow-all-egress
+  namespace: sandbox
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+  - {}
